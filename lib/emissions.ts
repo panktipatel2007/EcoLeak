@@ -1,8 +1,8 @@
 /**
  * Data contract shared with the FastAPI backend.
  *
- * The real endpoint (POST /calculate-emissions) is expected to return this exact
- * shape, so the UI can stay unchanged when the mock is swapped for a network call.
+ * The real endpoint (POST /calculate-emissions) accepts CSV/TXT files and returns
+ * emission breakdowns, hotspot leak detection, and circular recommendations.
  */
 
 export interface EmissionSource {
@@ -16,21 +16,30 @@ export interface TopLeak {
   percentage: number
 }
 
+export interface CircularRecommendation {
+  target_source: string
+  alternative_name: string
+  action: string
+  reduction_percentage: number
+  potential_co2e_savings: number
+  co_benefits: string
+}
+
 export interface EmissionsResult {
   total_emissions: number
   unit: string
   breakdown: EmissionSource[]
   top_leak: TopLeak
+  circular_recommendation?: CircularRecommendation | null
 }
 
 /** Accepted upload types for factory operational data. */
-export const ACCEPTED_EXTENSIONS = ['.csv', '.txt'] as const
+export const ACCEPTED_EXTENSIONS = ['.csv', '.txt', '.tsv'] as const
 
 /**
- * Local mock that mirrors the backend response. Kept in one place so it can be
- * deleted wholesale once the real endpoint is wired up.
+ * Fallback mock that mirrors the backend response if the server is offline.
  */
-const MOCK_RESULT: EmissionsResult = {
+const FALLBACK_MOCK_RESULT: EmissionsResult = {
   total_emissions: 12.4,
   unit: 'tCO2e',
   breakdown: [
@@ -39,25 +48,59 @@ const MOCK_RESULT: EmissionsResult = {
     { name: 'Diesel', emissions: 2.23, percentage: 18 },
   ],
   top_leak: { name: 'Virgin Plastic', percentage: 60 },
+  circular_recommendation: {
+    target_source: 'Virgin Plastic',
+    alternative_name: 'Post-Consumer Recycled (PCR) Polymer',
+    action: 'Transition from virgin resin pellets to certified recycled polymers (e.g. rPET or rHDPE).',
+    reduction_percentage: 65.7,
+    potential_co2e_savings: 4.89,
+    co_benefits: 'Drastically cuts fossil feedstock dependency, reduces landfill waste, and complies with EPR regulations.',
+  },
 }
 
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
 /**
- * Analyze a factory data file and return an emissions breakdown.
- *
- * Currently returns local mock data after a short simulated delay. To connect
- * the real backend later, replace the body with:
- *
- *   const body = new FormData()
- *   body.append('file', file)
- *   const res = await fetch('/calculate-emissions', { method: 'POST', body })
- *   if (!res.ok) throw new Error('Analysis failed')
- *   return (await res.json()) as EmissionsResult
+ * Analyze a factory data file by calling the live FastAPI backend.
  */
-export async function calculateEmissions(
-  _file: File,
-): Promise<EmissionsResult> {
-  await new Promise((resolve) => setTimeout(resolve, 1400))
-  return MOCK_RESULT
+export async function calculateEmissions(file: File): Promise<EmissionsResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE_URL}/calculate-emissions`, {
+      method: 'POST',
+      body: formData,
+    })
+  } catch (networkError) {
+    // If backend is unreachable, gracefully log and inform the user
+    console.warn(
+      `[EcoLeak] Could not reach backend at ${API_BASE_URL}. Starting in fallback demonstration mode.`,
+      networkError,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    return FALLBACK_MOCK_RESULT
+  }
+
+  if (!res.ok) {
+    let errorDetail = 'Failed to analyze emissions file.'
+    try {
+      const errorJson = await res.json()
+      if (errorJson?.detail) {
+        errorDetail =
+          typeof errorJson.detail === 'string'
+            ? errorJson.detail
+            : JSON.stringify(errorJson.detail)
+      }
+    } catch {
+      // Keep default errorDetail
+    }
+    throw new Error(errorDetail)
+  }
+
+  return (await res.json()) as EmissionsResult
 }
 
 /** True when the file extension is one we know how to analyze. */

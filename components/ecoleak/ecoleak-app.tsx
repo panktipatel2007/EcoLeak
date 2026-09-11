@@ -27,9 +27,13 @@ export function EcoLeakApp() {
       setResult(data)
       setAnalyzedName(file.name)
       setStatus('success')
-    } catch {
+    } catch (err: unknown) {
       setStatus('idle')
-      setError('Something went wrong while analyzing. Please try again.')
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Something went wrong while analyzing. Please try again.'
+      setError(message)
     }
   }
 

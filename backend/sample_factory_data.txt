@@ -1,0 +1,6 @@
+name	type	quantity	unit
+Electricity	electricity	1200	kWh
+Diesel	diesel	350	L
+Virgin Plastic	material	600	kg
+Cardboard Packaging	packaging	400	kg
+Natural Gas	natural_gas	500	m3

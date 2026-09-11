@@ -1,6 +1,7 @@
 import type { EmissionsResult } from '@/lib/emissions'
 import { TotalEmissionsCard } from './total-emissions-card'
 import { TopLeakCard } from './top-leak-card'
+import { CircularRecommendationCard } from './circular-recommendation-card'
 import { BreakdownChart } from './breakdown-chart'
 import { BreakdownTable } from './breakdown-table'
 
@@ -39,6 +40,13 @@ export function ResultsSection({ result, fileName }: ResultsSectionProps) {
           unit={result.unit}
         />
       </div>
+
+      {result.circular_recommendation ? (
+        <CircularRecommendationCard
+          recommendation={result.circular_recommendation}
+          unit={result.unit}
+        />
+      ) : null}
 
       <BreakdownChart
         breakdown={result.breakdown}

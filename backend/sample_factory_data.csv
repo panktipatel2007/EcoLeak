@@ -1,0 +1,5 @@
+name,type,quantity,unit
+Electricity,electricity,1000,kWh
+Diesel,diesel,200,L
+Virgin Plastic,material,500,kg
+Raw Material,material,300,kg
