@@ -1,0 +1,31 @@
+Date,Item,Quantity,Unit
+2026-01,Virgin Plastic,2400,kg
+2026-01,Electricity,6715,kWh
+2026-01,Diesel,728,L
+2026-01,Aluminium,180,kg
+2026-01,Machine Calibration Service,45,units
+2026-02,Virgin Plastic,2510,kg
+2026-02,Electricity,6980,kWh
+2026-02,Diesel,701,L
+2026-02,Aluminium,175,kg
+2026-02,Machine Calibration Service,40,units
+2026-03,Virgin Plastic,2380,kg
+2026-03,Electricity,7120,kWh
+2026-03,Diesel,760,L
+2026-03,Aluminium,190,kg
+2026-03,Machine Calibration Service,52,units
+2026-04,Virgin Plastic,2460,kg
+2026-04,Electricity,7340,kWh
+2026-04,Diesel,745,L
+2026-04,Aluminium,1850,kg
+2026-04,Machine Calibration Service,48,units
+2026-05,Virgin Plastic,2590,kg
+2026-05,Electricity,7610,kWh
+2026-05,Diesel,-120,L
+2026-05,Aluminium,185,kg
+2026-05,Machine Calibration Service,50,units
+2026-06,Virgin Plastic,2620,kg
+2026-06,Electricity,7880,kWh
+2026-06,Diesel,772,L
+2026-06,Aluminium,195,kg
+2026-06,Machine Calibration Service,n/a,units

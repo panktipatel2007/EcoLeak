@@ -1,0 +1,6 @@
+{
+  "name": "EcoLeak",
+  "description": "Carbon leak detection for factories. Upload operational data to identify high-emission inputs, circular alternatives, and AI-grounded insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

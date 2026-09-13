@@ -1,0 +1,44 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile documents",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Audit": {
+      "title": "Audit",
+      "description": "Saved carbon leak audit report",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "totalEmissions": { "type": "number" },
+        "unit": { "type": "string" },
+        "topLeakName": { "type": "string" },
+        "topLeakPercentage": { "type": "number" },
+        "topLeakSeverity": { "type": "string" },
+        "recordCount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "totalEmissions", "unit"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile collection"
+    },
+    "/users/{userId}/audits/{auditId}": {
+      "schema": "Audit",
+      "description": "User carbon audit reports"
+    }
+  }
+}
