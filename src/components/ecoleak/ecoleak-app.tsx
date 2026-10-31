@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import {
-  calculateEmissions,
   calculateEmissionsFromRecords,
   parseFactoryText,
   SAMPLE_DATASETS,
@@ -11,12 +10,19 @@ import {
 } from '@/lib/emissions'
 import { UploadZone } from './upload-zone'
 import { ResultsSection } from './results-section'
-import { EmptyResults } from './empty-results'
 import { RecordsPreview } from './records-preview'
 import { AiAssistant } from './ai-assistant'
 import { SavedAuditsModal } from './saved-audits-modal'
 import { AuthModal } from './auth-modal'
-import type { SavedAudit } from '@/lib/firestore-service'
+import {
+  getUserAudits,
+  saveAuditToFirestore,
+  saveGuestDraft,
+  getGuestDraft,
+  clearGuestDraft,
+  type SavedAudit,
+} from '@/lib/firestore-service'
+import { useAuth } from '@/lib/auth-context'
 import {
   CheckCircle2,
   AlertCircle,
@@ -25,13 +31,19 @@ import {
   UploadCloud,
   LayoutDashboard,
   MessageSquareText,
-  FolderOpen,
+  History,
+  PlusCircle,
 } from 'lucide-react'
 
 type Status = 'idle' | 'loading' | 'success'
 type View = 'setup' | 'dashboard' | 'advisor'
 
-export function EcoLeakApp() {
+interface EcoLeakAppProps {
+  initialView?: View
+}
+
+export function EcoLeakApp({ initialView }: EcoLeakAppProps) {
+  const { user } = useAuth()
   const [activeMode, setActiveMode] = useState<'file' | 'manual'>('file')
   const [file, setFile] = useState<File | null>(null)
   const [manualText, setManualText] = useState<string>('')
@@ -40,13 +52,60 @@ export function EcoLeakApp() {
   const [analyzedName, setAnalyzedName] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [unit, setUnit] = useState<'tCO2e' | 'kgCO2e'>('tCO2e')
-  const [view, setView] = useState<View>('setup')
+  const [view, setView] = useState<View>(initialView || 'setup')
   const [savedAuditsOpen, setSavedAuditsOpen] = useState(false)
   const [authModalOpen, setAuthModalOpen] = useState(false)
+  const isLoading = status === 'loading'
 
   // Staged parsed records for live validation and record preview
   const [stagedRecords, setStagedRecords] = useState<ParsedRecord[]>([])
   const [stagedWarnings, setStagedWarnings] = useState<string[]>([])
+
+  // On mount or user change: check for existing draft / past audits
+  useEffect(() => {
+    async function loadInitialAuditState() {
+      // 1. If user just logged in and had a guest draft, transfer draft to their cloud account
+      const draft = getGuestDraft()
+      if (user && draft) {
+        try {
+          await saveAuditToFirestore(user.uid, draft.title, draft.resultData)
+          clearGuestDraft()
+        } catch (e) {
+          console.warn('Could not auto-sync guest draft:', e)
+        }
+      }
+
+      // 2. If logged in, fetch user's audits. If they have past data, open directly on dashboard!
+      if (user) {
+        const userAudits = await getUserAudits(user.uid)
+        if (userAudits && userAudits.length > 0) {
+          const latest = userAudits[0]
+          setResult(latest.resultData)
+          setAnalyzedName(latest.title)
+          if (latest.resultData.records) {
+            setStagedRecords(latest.resultData.records)
+          }
+          setStatus('success')
+          setView('dashboard')
+          return
+        } else {
+          // If brand new account with 0 audits, direct to Import data page
+          setView('setup')
+        }
+      } else if (draft) {
+        // If guest has a draft saved, restore it
+        setResult(draft.resultData)
+        setAnalyzedName(draft.title)
+        if (draft.resultData.records) {
+          setStagedRecords(draft.resultData.records)
+        }
+        setStatus('success')
+        setView('dashboard')
+      }
+    }
+
+    loadInitialAuditState()
+  }, [user])
 
   // Helper to parse file or manual text into staged records
   async function parseSourceData(
@@ -112,15 +171,21 @@ export function EcoLeakApp() {
     setStagedRecords(records)
     setStagedWarnings(warnings)
 
-    // Automatically calculate for instant hackathon showcase
     setStatus('loading')
-    setTimeout(() => {
+    setTimeout(async () => {
       const computed = calculateEmissionsFromRecords(records, unit)
       computed.warnings = warnings
       setResult(computed)
       setAnalyzedName(sample.name)
       setStatus('success')
       setView('dashboard')
+
+      // Auto-save draft into history
+      if (user) {
+        await saveAuditToFirestore(user.uid, sample.name, computed)
+      } else {
+        saveGuestDraft(computed, sample.name)
+      }
     }, 450)
   }
 
@@ -175,17 +240,26 @@ export function EcoLeakApp() {
 
       const computed = calculateEmissionsFromRecords(recordsToAnalyze, unit)
       computed.warnings = warningsToReport
+      const auditTitle = activeMode === 'file' && file ? file.name : `Factory Operational Audit (${new Date().toLocaleDateString()})`
+
       setResult(computed)
-      setAnalyzedName(activeMode === 'file' && file ? file.name : 'Manual Factory Input')
+      setAnalyzedName(auditTitle)
       setStatus('success')
       setView('dashboard')
+
+      // Auto-save draft into History so old data is always preserved!
+      if (user) {
+        await saveAuditToFirestore(user.uid, auditTitle, computed)
+      } else {
+        saveGuestDraft(computed, auditTitle)
+      }
     } catch (err: any) {
       setStatus('idle')
       setError(err?.message || 'Something went wrong while analyzing. Please check your data.')
     }
   }
 
-  // Handle selecting a saved audit from Cloud
+  // Handle selecting a saved audit from History
   function handleSelectSavedAudit(audit: SavedAudit) {
     setResult(audit.resultData)
     setAnalyzedName(audit.title)
@@ -196,24 +270,26 @@ export function EcoLeakApp() {
     setView('dashboard')
   }
 
-  // Quick reset to start a new analysis
+  // Reset to Import new data while preserving history
+  function handleGoToImport() {
+    setView('setup')
+  }
+
+  // Quick reset for starting fresh import
   function handleReset() {
     setFile(null)
     setManualText('')
     setStagedRecords([])
     setStagedWarnings([])
-    setResult(null)
-    setStatus('idle')
     setError(null)
     setView('setup')
   }
 
-  const isLoading = status === 'loading'
   const hasStaged = stagedRecords.length > 0
 
   const navigation = [
-    { id: 'setup' as const, label: 'Import data', icon: UploadCloud },
     { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'setup' as const, label: 'Import data', icon: UploadCloud },
     { id: 'advisor' as const, label: 'Advisor', icon: MessageSquareText },
   ]
 
@@ -244,164 +320,188 @@ export function EcoLeakApp() {
         </div>
 
         <div className="flex items-center gap-2.5">
+          {/* Import New Data quick button if currently on dashboard */}
+          {result && view === 'dashboard' && (
+            <button
+              type="button"
+              id="btn-import-new-data"
+              onClick={handleGoToImport}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition-colors shadow-xs"
+            >
+              <PlusCircle className="size-3.5" />
+              <span>Import New Data</span>
+            </button>
+          )}
+
+          {/* History Button: inspect and restore past calculations */}
           <button
             type="button"
-            id="btn-open-saved-audits"
+            id="btn-open-history"
             onClick={() => setSavedAuditsOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors shadow-xs"
           >
-            <FolderOpen className="size-3.5 text-primary" />
-            <span>Saved Audits</span>
+            <History className="size-3.5 text-emerald-600" />
+            <span>History</span>
           </button>
 
           {result ? (
             <span className="hidden items-center gap-1.5 text-[11px] font-mono text-primary sm:flex">
-              <CheckCircle2 className="size-3.5" /> Audit complete
+              <CheckCircle2 className="size-3.5" /> Draft saved
             </span>
           ) : (
-            <span className="text-[11px] font-mono text-muted-foreground hidden sm:inline">Step 1 of 3</span>
+            <span className="text-[11px] font-mono text-muted-foreground hidden sm:inline">Import Stage</span>
           )}
         </div>
       </nav>
 
-      {view === 'setup' && <div className="grid min-w-0 gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(260px,0.65fr)] lg:items-start">
-      <div className="min-w-0 space-y-6">
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 font-mono text-xs text-muted-foreground shadow-xs">
-              <span
-                aria-hidden="true"
-                className="size-1.5 rounded-full bg-primary"
-              />
-              Hackathon Factory Carbon Audit
-            </span>
-            <span className="text-[11px] font-mono text-muted-foreground/80">
-              GHG Protocol Scope 1, 2 &amp; 3
-            </span>
-          </div>
-
-          <h1 className="text-3xl font-bold leading-[1.15] tracking-tight text-foreground text-balance sm:text-4xl">
-            Detect and eliminate your factory&apos;s biggest carbon leaks.
-          </h1>
-
-          <p className="max-w-md text-pretty text-sm leading-relaxed text-muted-foreground">
-            Upload your factory CSV or paste raw operational logs. EcoLeak
-            automatically detects electricity, fuels, materials, and freight to
-            quantify CO₂e and pinpoint your #1 reduction opportunity.
-          </p>
-        </div>
-
-        {/* Upload & Manual Data Module */}
-        <div className="space-y-4">
-          <UploadZone
-            file={file}
-            manualText={manualText}
-            activeMode={activeMode}
-            onModeChange={setActiveMode}
-            onFileSelected={handleFileSelected}
-            onFileCleared={handleFileCleared}
-            onManualTextChange={handleManualTextChange}
-            onLoadSample={handleLoadSample}
-            onError={setError}
-            disabled={isLoading}
-          />
-
-          {/* Validation or parsing error banner */}
-          {error ? (
-            <p
-              role="alert"
-              className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive font-medium"
-            >
-              <AlertCircle className="size-4 shrink-0 mt-0.5" />
-              {error}
-            </p>
-          ) : null}
-
-          {/* Action buttons */}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              id="btn-analyze-emissions"
-              onClick={handleAnalyze}
-              disabled={isLoading || (!file && !manualText.trim())}
-              className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {isLoading ? (
-                <>
-                  <svg
-                    className="size-4 animate-spin text-primary-foreground"
-                    viewBox="0 0 24 24"
-                    fill="none"
+      {/* VIEW 1: IMPORT DATA */}
+      {view === 'setup' && (
+        <div className="grid min-w-0 gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(260px,0.65fr)] lg:items-start">
+          <div className="min-w-0 space-y-6">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 font-mono text-xs text-muted-foreground shadow-xs">
+                  <span
                     aria-hidden="true"
-                  >
-                    <circle
-                      cx="12"
-                      cy="12"
-                      r="9"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      strokeOpacity="0.3"
-                    />
-                    <path
-                      d="M21 12a9 9 0 0 0-9-9"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  Calculating Carbon CO₂e…
-                </>
-              ) : (
-                <>
-                  <BarChart3 className="size-4" />
-                  Calculate Factory Emissions
-                </>
-              )}
-            </button>
+                    className="size-1.5 rounded-full bg-emerald-500"
+                  />
+                  Import Factory Data
+                </span>
+                <span className="text-[11px] font-mono text-muted-foreground/80">
+                  GHG Protocol Scope 1, 2 &amp; 3
+                </span>
+              </div>
 
-            {status === 'success' && (
-              <button
-                type="button"
-                id="btn-reset-audit"
-                onClick={handleReset}
-                title="Reset & Start New Audit"
-                className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              >
-                <RotateCcw className="size-4" />
-              </button>
+              <h1 className="text-3xl font-bold leading-[1.15] tracking-tight text-foreground text-balance sm:text-4xl">
+                Upload or paste your factory operations.
+              </h1>
+
+              <p className="max-w-md text-pretty text-sm leading-relaxed text-muted-foreground">
+                Drop your CSV or machine logs. EcoLeak calculates emissions and preserves all your previous drafts in your <strong>History</strong>.
+              </p>
+            </div>
+
+            {/* Upload & Manual Data Module */}
+            <div className="space-y-4">
+              <UploadZone
+                file={file}
+                manualText={manualText}
+                activeMode={activeMode}
+                onModeChange={setActiveMode}
+                onFileSelected={handleFileSelected}
+                onFileCleared={handleFileCleared}
+                onManualTextChange={handleManualTextChange}
+                onLoadSample={handleLoadSample}
+                onError={setError}
+                disabled={isLoading}
+              />
+
+              {/* Validation or parsing error banner */}
+              {error ? (
+                <p
+                  role="alert"
+                  className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive font-medium"
+                >
+                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                  {error}
+                </p>
+              ) : null}
+
+              {/* Action buttons */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  id="btn-analyze-emissions"
+                  onClick={handleAnalyze}
+                  disabled={isLoading || (!file && !manualText.trim())}
+                  className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-emerald-600 px-5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isLoading ? (
+                    <>
+                      <svg
+                        className="size-4 animate-spin text-white"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        aria-hidden="true"
+                      >
+                        <circle
+                          cx="12"
+                          cy="12"
+                          r="9"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          strokeOpacity="0.3"
+                        />
+                        <path
+                          d="M21 12a9 9 0 0 0-9-9"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      Calculating Factory Emissions…
+                    </>
+                  ) : (
+                    <>
+                      <BarChart3 className="size-4" />
+                      Calculate Factory Emissions
+                    </>
+                  )}
+                </button>
+
+                {result && (
+                  <button
+                    type="button"
+                    id="btn-reset-audit"
+                    onClick={handleReset}
+                    title="Clear current inputs"
+                    className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-surface px-3 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  >
+                    <RotateCcw className="size-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Instant Preview of Uploaded Records */}
+            {hasStaged && (
+              <div className="pt-2">
+                <RecordsPreview
+                  records={stagedRecords}
+                  warnings={stagedWarnings}
+                />
+              </div>
             )}
           </div>
-        </div>
 
-        {/* Feature 1 & 2: Instant Preview of Uploaded Records */}
-        {hasStaged && (
-          <div className="pt-2">
-            <RecordsPreview
-              records={stagedRecords}
-              warnings={stagedWarnings}
-            />
-          </div>
-        )}
-      </div>
-
-        <div className="min-w-0 rounded-lg border border-border bg-surface/70 p-5">
-          <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-primary">Audit workflow</p>
-          <h2 className="mt-2 text-lg font-semibold text-foreground">From raw records to a reduction plan.</h2>
-          <div className="mt-5 space-y-4">
-            {['Normalize factory activity', 'Locate the biggest carbon leak', 'Turn findings into action'].map((step, index) => (
-              <div key={step} className="flex min-w-0 gap-3">
-                <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/10 font-mono text-[11px] font-bold text-primary">0{index + 1}</span>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-foreground">{step}</p>
-                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{index === 0 ? 'CSV, TXT, or pasted operational logs.' : index === 1 ? 'See totals, sources, categories, and trends.' : 'Ask the grounded advisor what to do next.'}</p>
+          <div className="min-w-0 rounded-lg border border-border bg-surface/70 p-5">
+            <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-emerald-600">Continuous Auditing</p>
+            <h2 className="mt-2 text-lg font-semibold text-foreground">Drafts &amp; History Auto-Saved</h2>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Every time you calculate emissions, your audit is preserved. You can always click <strong>History</strong> in the top right to restore previous plant runs.
+            </p>
+            <div className="mt-5 space-y-4">
+              {['Normalize factory inputs', 'View dashboard & Pareto leaks', 'Access past audits from History'].map((step, index) => (
+                <div key={step} className="flex min-w-0 gap-3">
+                  <span className="grid size-6 shrink-0 place-items-center rounded-full bg-emerald-500/10 font-mono text-[11px] font-bold text-emerald-600">0{index + 1}</span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">{step}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                      {index === 0
+                        ? 'Drop your operational CSV or text logs.'
+                        : index === 1
+                        ? 'See totals, Scope breakdown, and circular recommendations.'
+                        : 'Switch between previous assessments anytime.'}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
-      </div>
-      }
+      )}
 
+      {/* VIEW 2: DASHBOARD */}
       {view === 'dashboard' && result && (
         <ResultsSection
           result={result}
@@ -412,10 +512,11 @@ export function EcoLeakApp() {
         />
       )}
 
+      {/* VIEW 3: ADVISOR */}
       {view === 'advisor' && result && (
         <div className="mx-auto w-full max-w-4xl space-y-5">
           <div>
-            <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-primary">Step 03 / Decision support</p>
+            <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-emerald-600">Step 03 / Decision support</p>
             <h1 className="mt-1 text-2xl font-bold tracking-tight text-foreground">Make the next reduction move.</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Ask questions about this audit. Every response is grounded in the calculated figures above.</p>
           </div>
@@ -423,7 +524,7 @@ export function EcoLeakApp() {
         </div>
       )}
 
-      {/* Cloud Audits & Auth Modals */}
+      {/* History Modal */}
       <SavedAuditsModal
         isOpen={savedAuditsOpen}
         onClose={() => setSavedAuditsOpen(false)}
